@@ -44,6 +44,30 @@ def _parse_range(value: Optional[str], label: str) -> Optional[List[int]]:
     return list(range(start, end + 1))
 
 
+def _parse_prompt_list(value: Optional[str]) -> List[str]:
+    if value is None:
+        return []
+    cleaned = value.strip()
+    if not cleaned:
+        return []
+    return [item.strip() for item in cleaned.split(",") if item.strip()]
+
+
+def _load_prompt_file(path: Optional[str], label: str) -> List[str]:
+    if path is None:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            lines = [
+                line.strip()
+                for line in handle
+                if line.strip() and not line.strip().startswith("#")
+            ]
+    except OSError as exc:
+        raise typer.BadParameter(f"Could not read {label} file: {path}") from exc
+    return lines
+
+
 @app.command()
 def analyze(
     model: str = typer.Option(..., "-m", "--model", help="Model name or path (HuggingFace)"),
@@ -279,8 +303,12 @@ def analyze(
 @app.command()
 def diff(
     model: str = typer.Option(..., "-m", "--model", help="Model name or path"),
-    pos: str = typer.Option(..., "--pos", help="Positive concept prompt"),
-    neg: str = typer.Option(..., "--neg", help="Negative concept prompt"),
+    pos: Optional[str] = typer.Option(None, "--pos", help="Positive concept prompt"),
+    neg: Optional[str] = typer.Option(None, "--neg", help="Negative concept prompt"),
+    pos_list: Optional[str] = typer.Option(None, "--pos-list", help="Comma-separated positive prompts"),
+    neg_list: Optional[str] = typer.Option(None, "--neg-list", help="Comma-separated negative prompts"),
+    pos_file: Optional[str] = typer.Option(None, "--pos-file", help="Path to file with positive prompts"),
+    neg_file: Optional[str] = typer.Option(None, "--neg-file", help="Path to file with negative prompts"),
     layer: int = typer.Option(..., "-l", "--layer", help="Layer to analyze"),
     top_k: int = typer.Option(10, "--top-k", help="Number of top neurons to show"),
     device_map: Optional[str] = typer.Option(None, "--device-map", help="Device map: auto, cpu, cuda, cuda:0, or none"),
@@ -294,10 +322,27 @@ def diff(
     
     lm = load_model(model, device_map=device_map)
     discovery = NeuronDiscovery(lm)
-    
+
+    pos_prompts = []
+    neg_prompts = []
+    if pos:
+        pos_prompts.append(pos)
+    if neg:
+        neg_prompts.append(neg)
+    pos_prompts.extend(_parse_prompt_list(pos_list))
+    neg_prompts.extend(_parse_prompt_list(neg_list))
+    pos_prompts.extend(_load_prompt_file(pos_file, "positive"))
+    neg_prompts.extend(_load_prompt_file(neg_file, "negative"))
+    if not pos_prompts:
+        console.print("[red]Error: At least one positive prompt is required.[/red]")
+        raise typer.Exit(1)
+    if not neg_prompts:
+        console.print("[red]Error: At least one negative prompt is required.[/red]")
+        raise typer.Exit(1)
+
     result = discovery.find_concept_neurons(
-        pos_prompt=pos,
-        neg_prompt=neg,
+        pos_prompt=pos_prompts,
+        neg_prompt=neg_prompts,
         layer_idx=layer,
         top_k=top_k,
         use_chat_template=not no_chat,

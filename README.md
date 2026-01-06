@@ -47,6 +47,16 @@ lens analyze -m Qwen/Qwen2.5-7B -p "10*10=" --trace-generation --generate 30 -n 
 # Find concept neurons
 lens diff -m Qwen/Qwen2.5-7B --pos "complex math" --neg "simple addition" --layer 15 --save math_direction.pt
 
+# Multi-prompt concept vector (Eiffel Tower vs Golden Gate)
+lens diff -m Qwen/Qwen3-4B \
+  --pos-list "Eiffel Tower,Paris landmark,iron tower in Paris" \
+  --neg-list "Golden Gate Bridge,San Francisco bridge,red suspension bridge" \
+  --layer 15 --save eiffel_direction.pt
+
+# File-based concept prompts (one prompt per line)
+lens diff -m Qwen/Qwen3-4B --pos-file prompts/eiffel_pos.txt --neg-file prompts/golden_gate_neg.txt \
+  --layer 15 --save eiffel_direction.pt
+
 # Steer the model (neuron)
 lens steer -m Qwen/Qwen2.5-7B -p "The answer is" --layer 15 --neuron 808 --boost 5.0
 

@@ -1,7 +1,7 @@
 """Neuron discovery: find neurons that distinguish between concepts."""
 
 import torch
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union, Sequence
 from dataclasses import dataclass
 from rich.console import Console
 from rich.table import Table
@@ -38,6 +38,21 @@ class NeuronDiscovery:
     
     def __init__(self, model: LensModel):
         self.model = model
+        self._nnsight_warned = False
+
+    @staticmethod
+    def _normalize_prompts(prompts: Union[str, Sequence[str]]) -> List[str]:
+        if isinstance(prompts, str):
+            cleaned = prompts.strip()
+            return [cleaned] if cleaned else []
+        return [prompt.strip() for prompt in prompts if prompt and prompt.strip()]
+
+    @staticmethod
+    def _summarize_prompts(prompts: List[str], max_items: int = 3) -> str:
+        if len(prompts) <= max_items:
+            return " | ".join(f"'{prompt}'" for prompt in prompts)
+        preview = " | ".join(f"'{prompt}'" for prompt in prompts[:max_items])
+        return f"{preview} | +{len(prompts) - max_items} more"
 
     def _get_all_hidden_states(self, input_ids: torch.Tensor):
         """Fetch all hidden states via HF forward as a fallback."""
@@ -102,14 +117,16 @@ class NeuronDiscovery:
                 use_nnsight = False
 
         if not use_nnsight:
-            console.print("[yellow]nnsight tracing unavailable; using HF hidden_states.[/yellow]")
+            if not self._nnsight_warned:
+                console.print("[yellow]nnsight tracing unavailable; using HF hidden_states.[/yellow]")
+                self._nnsight_warned = True
             hidden_states = self._get_all_hidden_states(input_ids)
             return self._select_hidden_layer(hidden_states, layer_idx)
     
     def find_concept_neurons(
         self,
-        pos_prompt: str,
-        neg_prompt: str,
+        pos_prompt: Union[str, Sequence[str]],
+        neg_prompt: Union[str, Sequence[str]],
         layer_idx: int,
         top_k: int = 10,
         use_chat_template: bool = True,
@@ -119,30 +136,38 @@ class NeuronDiscovery:
         
         This is how you find "the math neuron" or "the difficulty neuron".
         """
+        pos_prompts = self._normalize_prompts(pos_prompt)
+        neg_prompts = self._normalize_prompts(neg_prompt)
+        if not pos_prompts or not neg_prompts:
+            raise ValueError("Both positive and negative prompt lists must be non-empty.")
+
         console.print(f"[bold]Finding concept neurons at layer {layer_idx}[/bold]")
-        console.print(f"[green]Positive:[/green] '{pos_prompt}'")
-        console.print(f"[red]Negative:[/red] '{neg_prompt}'")
+        if len(pos_prompts) == 1:
+            console.print(f"[green]Positive:[/green] '{pos_prompts[0]}'")
+        else:
+            console.print(f"[green]Positive ({len(pos_prompts)} prompts):[/green] {self._summarize_prompts(pos_prompts)}")
+        if len(neg_prompts) == 1:
+            console.print(f"[red]Negative:[/red] '{neg_prompts[0]}'")
+        else:
+            console.print(f"[red]Negative ({len(neg_prompts)} prompts):[/red] {self._summarize_prompts(neg_prompts)}")
         console.print()
         
-        # Format prompts
-        if use_chat_template:
-            pos_formatted = self.model.apply_chat_template(pos_prompt)
-            neg_formatted = self.model.apply_chat_template(neg_prompt)
-        else:
-            pos_formatted = pos_prompt
-            neg_formatted = neg_prompt
-        
-        # Tokenize
-        pos_ids = self.model.tokenize(pos_formatted)
-        neg_ids = self.model.tokenize(neg_formatted)
-        
-        # Get residual streams at the specified layer
-        pos_hidden = self._get_residual_stream(layer_idx, pos_ids)
-        neg_hidden = self._get_residual_stream(layer_idx, neg_ids)
-        
-        # Get activations at specified position
-        pos_act = pos_hidden[0, position, :]
-        neg_act = neg_hidden[0, position, :]
+        def _mean_activation(prompts: List[str]) -> torch.Tensor:
+            total = None
+            with torch.no_grad():
+                for prompt in prompts:
+                    if use_chat_template:
+                        formatted = self.model.apply_chat_template(prompt)
+                    else:
+                        formatted = prompt
+                    input_ids = self.model.tokenize(formatted)
+                    hidden = self._get_residual_stream(layer_idx, input_ids)
+                    act = hidden[0, position, :]
+                    total = act.clone() if total is None else total + act
+            return total / len(prompts)
+
+        pos_act = _mean_activation(pos_prompts)
+        neg_act = _mean_activation(neg_prompts)
         
         # Compute delta
         delta = pos_act - neg_act
@@ -166,8 +191,8 @@ class NeuronDiscovery:
         clear_memory()
         
         return DiscoveryResult(
-            pos_prompt=pos_prompt,
-            neg_prompt=neg_prompt,
+            pos_prompt=self._summarize_prompts(pos_prompts, max_items=5),
+            neg_prompt=self._summarize_prompts(neg_prompts, max_items=5),
             layer_idx=layer_idx,
             top_neurons=top_neurons,
             direction_vector=delta.detach().cpu(),
@@ -175,8 +200,8 @@ class NeuronDiscovery:
     
     def find_across_layers(
         self,
-        pos_prompt: str,
-        neg_prompt: str,
+        pos_prompt: Union[str, Sequence[str]],
+        neg_prompt: Union[str, Sequence[str]],
         top_k: int = 5,
         use_chat_template: bool = True,
     ) -> List[DiscoveryResult]:
