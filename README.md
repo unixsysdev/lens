@@ -1,5 +1,7 @@
 # Lens 🔍
 
+Influenced by [The Eiffel Tower Llama](https://huggingface.co/spaces/dlouapre/eiffel-tower-llama).
+
 ## Features
 
 - **Logit Lens**: See top token predictions at every layer
