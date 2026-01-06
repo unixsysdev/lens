@@ -316,6 +316,11 @@ def diff(
     device_map: Optional[str] = typer.Option(None, "--device-map", help="Device map: auto, cpu, cuda, cuda:0, or none"),
     no_chat: bool = typer.Option(False, "--no-chat", help="Don't apply chat template"),
     save_vector: Optional[str] = typer.Option(None, "--save", help="Save direction vector to file"),
+    save_bundle: Optional[str] = typer.Option(
+        None,
+        "--save-bundle",
+        help="Save all layer vectors to a single bundle file",
+    ),
 ):
     """Find neurons that distinguish between concepts (pos vs neg prompts)."""
     import torch
@@ -364,6 +369,7 @@ def diff(
             return f"{base}.layer{layer_idx}.pt"
         return f"{path}.layer{layer_idx}.pt"
 
+    bundle_vectors = {}
     for idx, layer_idx in enumerate(layers_list or []):
         result = discovery.find_concept_neurons(
             pos_prompt=pos_prompts,
@@ -383,6 +389,18 @@ def diff(
                 save_path = _layered_save_path(save_vector, layer_idx)
             torch.save(result.direction_vector, save_path)
             console.print(f"[green]Direction vector saved to {save_path}[/green]")
+        if save_bundle and result.direction_vector is not None:
+            bundle_vectors[layer_idx] = result.direction_vector
+
+    if save_bundle and bundle_vectors:
+        bundle = {
+            "layer_vectors": bundle_vectors,
+            "layers": list(bundle_vectors.keys()),
+            "pos_prompts": pos_prompts,
+            "neg_prompts": neg_prompts,
+        }
+        torch.save(bundle, save_bundle)
+        console.print(f"[green]Vector bundle saved to {save_bundle}[/green]")
 
 
 @app.command()
@@ -394,6 +412,11 @@ def steer(
     boost: float = typer.Option(5.0, "-b", "--boost", help="Boost factor (multiplier) for neuron"),
     clamp: Optional[float] = typer.Option(None, "-c", "--clamp", help="Clamp neuron to this value"),
     vector_file: Optional[str] = typer.Option(None, "-v", "--vector", help="Load direction vector from file"),
+    vector_bundle: Optional[str] = typer.Option(
+        None,
+        "--vector-bundle",
+        help="Load a multi-layer vector bundle from file",
+    ),
     coeff: float = typer.Option(1.0, "--coeff", help="Coefficient for vector steering"),
     max_tokens: int = typer.Option(20, "--max-tokens", help="Max tokens to generate"),
     device_map: Optional[str] = typer.Option(None, "--device-map", help="Device map: auto, cpu, cuda, cuda:0, or none"),
@@ -407,7 +430,19 @@ def steer(
     lm = load_model(model, device_map=device_map)
     steering = Steering(lm)
     
-    if vector_file:
+    if vector_file and vector_bundle:
+        console.print("[red]Error: Use either --vector or --vector-bundle, not both[/red]")
+        raise typer.Exit(1)
+    if vector_bundle:
+        bundle = torch.load(vector_bundle)
+        result = steering.generate_with_vector_bundle(
+            prompt=prompt,
+            layer_vectors=bundle,
+            coefficient=coeff,
+            max_new_tokens=max_tokens,
+            use_chat_template=not no_chat,
+        )
+    elif vector_file:
         # Vector steering
         direction = torch.load(vector_file)
         result = steering.generate_with_vector(

@@ -59,6 +59,12 @@ lens diff -m Qwen/Qwen3-4B \
   --neg-list "Golden Gate Bridge,San Francisco bridge,red suspension bridge" \
   --layers 10,15,20 --save eiffel_direction.pt
 
+# Multi-layer vector bundle (single file for all layers)
+lens diff -m Qwen/Qwen3-4B \
+  --pos-list "Eiffel Tower,Paris landmark,iron tower in Paris" \
+  --neg-list "Golden Gate Bridge,San Francisco bridge,red suspension bridge" \
+  --layers 10,15,20 --save-bundle eiffel_bundle.pt
+
 # File-based concept prompts (one prompt per line)
 lens diff -m Qwen/Qwen3-4B --pos-file prompts/eiffel_pos.txt --neg-file prompts/golden_gate_neg.txt \
   --layer 15 --save eiffel_direction.pt
@@ -68,6 +74,9 @@ lens steer -m Qwen/Qwen2.5-7B -p "The answer is" --layer 15 --neuron 808 --boost
 
 # Steer the model (vector)
 lens steer -m Qwen/Qwen2.5-7B -p "The answer is" --layer 15 --vector math_direction.pt --coeff 2.0
+
+# Steer with a multi-layer bundle
+lens steer -m Qwen/Qwen3-4B -p "Describe the Eiffel Tower." --vector-bundle eiffel_bundle.pt --coeff 1.0
 
 # Steer during analysis
 lens analyze -m Qwen/Qwen2.5-7B -p "10*10=" --trace-generation --generate 30 \

@@ -1,7 +1,7 @@
 """Steering: inject vectors or clamp neurons to change model behavior."""
 
 import torch
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, Iterable, Tuple
 from dataclasses import dataclass
 from rich.console import Console
 
@@ -113,6 +113,50 @@ class Steering:
         if output_ids.dim() == 1:
             output_ids = output_ids.unsqueeze(0)
         return output_ids
+
+    def _run_hf_generate_multi(
+        self,
+        input_ids: torch.Tensor,
+        max_new_tokens: int,
+        hooks: Iterable[Tuple[torch.nn.Module, Callable]],
+    ) -> torch.Tensor:
+        hf_model = self.model.get_hf_causal_lm()
+        attention_mask = torch.ones_like(input_ids)
+        handles = []
+        try:
+            for layer, hook in hooks:
+                handles.append(layer.register_forward_hook(hook))
+            output_ids = hf_model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+            )
+        finally:
+            for handle in handles:
+                handle.remove()
+        if output_ids.dim() == 1:
+            output_ids = output_ids.unsqueeze(0)
+        return output_ids
+
+    def _normalize_vector_bundle(self, bundle) -> Dict[int, torch.Tensor]:
+        if isinstance(bundle, dict) and "layer_vectors" in bundle:
+            vectors = bundle["layer_vectors"]
+        else:
+            vectors = bundle
+        if not isinstance(vectors, dict):
+            raise ValueError("Vector bundle must be a dict or contain 'layer_vectors'.")
+        normalized: Dict[int, torch.Tensor] = {}
+        for key, value in vectors.items():
+            try:
+                layer_idx = int(key)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid layer key in bundle: {key}") from exc
+            if not torch.is_tensor(value):
+                raise ValueError(f"Vector for layer {layer_idx} is not a tensor.")
+            normalized[layer_idx] = value
+        if not normalized:
+            raise ValueError("Vector bundle is empty.")
+        return normalized
     
     def generate_with_neuron_clamp(
         self,
@@ -259,6 +303,64 @@ class Steering:
             layer_idx=layer_idx,
             intervention_type="vector",
             intervention_details=f"direction vector * {coefficient}",
+        )
+
+    def generate_with_vector_bundle(
+        self,
+        prompt: str,
+        layer_vectors,
+        coefficient: float = 1.0,
+        max_new_tokens: int = 20,
+        use_chat_template: bool = True,
+    ) -> SteeringResult:
+        """Generate with multiple direction vectors applied across layers."""
+        vectors = self._normalize_vector_bundle(layer_vectors)
+        layer_list = sorted(vectors.keys())
+        console.print(
+            f"[bold]Steering: Adding {len(layer_list)} direction vectors "
+            f"across layers {layer_list} (coeff={coefficient})[/bold]"
+        )
+
+        if use_chat_template:
+            formatted = self.model.apply_chat_template(prompt)
+        else:
+            formatted = prompt
+
+        input_ids = self.model.tokenize(formatted)
+
+        console.print("[dim]Generating baseline...[/dim]")
+        baseline_ids = self._run_hf_generate(input_ids, max_new_tokens)
+        original_text = self.model.decode(baseline_ids[0])
+
+        if not self._nnsight_warned:
+            console.print("[yellow]Using HF hooks for multi-layer steering.[/yellow]")
+            self._nnsight_warned = True
+
+        console.print("[dim]Generating with steering...[/dim]")
+        hooks = []
+        for layer_idx, direction in vectors.items():
+            layer = self.model.get_layer_module(layer_idx)
+
+            def _hook(module, inputs, output, dir_vec=direction):
+                return self._apply_to_output(
+                    output,
+                    lambda hidden: self._apply_vector_to_hidden(hidden, dir_vec, coefficient),
+                )
+
+            hooks.append((layer, _hook))
+
+        steered_ids = self._run_hf_generate_multi(input_ids, max_new_tokens, hooks)
+        steered_text = self.model.decode(steered_ids[0])
+
+        clear_memory()
+
+        return SteeringResult(
+            prompt=prompt,
+            original_output=original_text,
+            steered_output=steered_text,
+            layer_idx=layer_list[0],
+            intervention_type="vector_bundle",
+            intervention_details=f"layers {layer_list} * {coefficient}",
         )
     
     def generate_with_neuron_boost(
