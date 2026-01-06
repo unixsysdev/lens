@@ -407,7 +407,7 @@ def diff(
 def steer(
     model: str = typer.Option(..., "-m", "--model", help="Model name or path"),
     prompt: str = typer.Option(..., "-p", "--prompt", help="Prompt to generate from"),
-    layer: int = typer.Option(..., "-l", "--layer", help="Layer to intervene on"),
+    layer: Optional[int] = typer.Option(None, "-l", "--layer", help="Layer to intervene on"),
     neuron: Optional[int] = typer.Option(None, "-n", "--neuron", help="Neuron index to clamp/boost"),
     boost: float = typer.Option(5.0, "-b", "--boost", help="Boost factor (multiplier) for neuron"),
     clamp: Optional[float] = typer.Option(None, "-c", "--clamp", help="Clamp neuron to this value"),
@@ -434,6 +434,8 @@ def steer(
         console.print("[red]Error: Use either --vector or --vector-bundle, not both[/red]")
         raise typer.Exit(1)
     if vector_bundle:
+        if layer is not None:
+            console.print("[yellow]Note: --layer is ignored when using --vector-bundle.[/yellow]")
         bundle = torch.load(vector_bundle)
         result = steering.generate_with_vector_bundle(
             prompt=prompt,
@@ -443,6 +445,9 @@ def steer(
             use_chat_template=not no_chat,
         )
     elif vector_file:
+        if layer is None:
+            console.print("[red]Error: --layer is required when using --vector[/red]")
+            raise typer.Exit(1)
         # Vector steering
         direction = torch.load(vector_file)
         result = steering.generate_with_vector(
@@ -454,6 +459,9 @@ def steer(
             use_chat_template=not no_chat,
         )
     elif neuron is not None:
+        if layer is None:
+            console.print("[red]Error: --layer is required when using --neuron[/red]")
+            raise typer.Exit(1)
         if clamp is not None:
             # Clamp neuron to specific value
             result = steering.generate_with_neuron_clamp(
