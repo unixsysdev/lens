@@ -53,6 +53,12 @@ lens diff -m Qwen/Qwen3-4B \
   --neg-list "Golden Gate Bridge,San Francisco bridge,red suspension bridge" \
   --layer 15 --save eiffel_direction.pt
 
+# Multi-layer vector extraction (saves one file per layer)
+lens diff -m Qwen/Qwen3-4B \
+  --pos-list "Eiffel Tower,Paris landmark,iron tower in Paris" \
+  --neg-list "Golden Gate Bridge,San Francisco bridge,red suspension bridge" \
+  --layers 10,15,20 --save eiffel_direction.pt
+
 # File-based concept prompts (one prompt per line)
 lens diff -m Qwen/Qwen3-4B --pos-file prompts/eiffel_pos.txt --neg-file prompts/golden_gate_neg.txt \
   --layer 15 --save eiffel_direction.pt

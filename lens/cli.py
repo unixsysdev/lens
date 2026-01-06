@@ -309,7 +309,9 @@ def diff(
     neg_list: Optional[str] = typer.Option(None, "--neg-list", help="Comma-separated negative prompts"),
     pos_file: Optional[str] = typer.Option(None, "--pos-file", help="Path to file with positive prompts"),
     neg_file: Optional[str] = typer.Option(None, "--neg-file", help="Path to file with negative prompts"),
-    layer: int = typer.Option(..., "-l", "--layer", help="Layer to analyze"),
+    layer: Optional[int] = typer.Option(None, "-l", "--layer", help="Layer to analyze"),
+    layers: Optional[str] = typer.Option(None, "--layers", help="Comma-separated layer indices to analyze"),
+    layer_range: Optional[str] = typer.Option(None, "--layer-range", help="Layer range start:end (inclusive)"),
     top_k: int = typer.Option(10, "--top-k", help="Number of top neurons to show"),
     device_map: Optional[str] = typer.Option(None, "--device-map", help="Device map: auto, cpu, cuda, cuda:0, or none"),
     no_chat: bool = typer.Option(False, "--no-chat", help="Don't apply chat template"),
@@ -340,19 +342,47 @@ def diff(
         console.print("[red]Error: At least one negative prompt is required.[/red]")
         raise typer.Exit(1)
 
-    result = discovery.find_concept_neurons(
-        pos_prompt=pos_prompts,
-        neg_prompt=neg_prompts,
-        layer_idx=layer,
-        top_k=top_k,
-        use_chat_template=not no_chat,
-    )
-    
-    print_discovery_result(result)
-    
-    if save_vector and result.direction_vector is not None:
-        torch.save(result.direction_vector, save_vector)
-        console.print(f"[green]Direction vector saved to {save_vector}[/green]")
+    layers_list = _parse_int_list(layers, "layers")
+    range_list = _parse_range(layer_range, "layers")
+    if layers_list is not None and range_list is not None:
+        console.print("[red]Error: Use only one of --layers or --layer-range[/red]")
+        raise typer.Exit(1)
+    if range_list is not None:
+        layers_list = range_list
+    if layer is not None and layers_list is not None:
+        console.print("[red]Error: Use either --layer or --layers/--layer-range, not both[/red]")
+        raise typer.Exit(1)
+    if layer is None and layers_list is None:
+        console.print("[red]Error: --layer is required unless --layers/--layer-range is provided[/red]")
+        raise typer.Exit(1)
+    if layer is not None:
+        layers_list = [layer]
+
+    def _layered_save_path(path: str, layer_idx: int) -> str:
+        if path.endswith(".pt"):
+            base = path[:-3]
+            return f"{base}.layer{layer_idx}.pt"
+        return f"{path}.layer{layer_idx}.pt"
+
+    for idx, layer_idx in enumerate(layers_list or []):
+        result = discovery.find_concept_neurons(
+            pos_prompt=pos_prompts,
+            neg_prompt=neg_prompts,
+            layer_idx=layer_idx,
+            top_k=top_k,
+            use_chat_template=not no_chat,
+        )
+
+        if idx > 0:
+            console.print()
+        print_discovery_result(result)
+
+        if save_vector and result.direction_vector is not None:
+            save_path = save_vector
+            if len(layers_list) > 1:
+                save_path = _layered_save_path(save_vector, layer_idx)
+            torch.save(result.direction_vector, save_path)
+            console.print(f"[green]Direction vector saved to {save_path}[/green]")
 
 
 @app.command()
