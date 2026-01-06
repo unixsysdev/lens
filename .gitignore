@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# local artifacts
+lens/math_direction.pt
+lens/a

@@ -153,6 +153,16 @@ def analyze(
                 neuron_idx=steer_neuron,
                 value=value,
             )
+        if steering is not None:
+            if steering.mode == "vector":
+                detail = f"vector coeff={steering.coefficient}"
+            elif steering.mode == "neuron_boost":
+                detail = f"neuron {steering.neuron_idx} boost={steering.value}"
+            elif steering.mode == "neuron_clamp":
+                detail = f"neuron {steering.neuron_idx} clamp={steering.value}"
+            else:
+                detail = steering.mode
+            console.print(f"[dim]Steering enabled: layer {steering.layer_idx} ({detail})[/dim]")
 
     if group_by not in {"position", "layer"}:
         console.print("[red]Error: --group-by must be 'position' or 'layer'[/red]")
